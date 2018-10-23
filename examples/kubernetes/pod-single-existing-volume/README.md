@@ -1,6 +1,6 @@
 # Use an existing volume
 
-Below you will find the instruction on how to use an existing DigitalOcean Block
+Below you will find the instruction on how to use an existing hetzner Block
 Storage with your Kubernetes cluster.
 
 ## Known issues
@@ -27,9 +27,9 @@ metadata:
   annotations:
     # fake it by indicating this is provisioned dynamically, so the system
     # works properly
-    pv.kubernetes.io/provisioned-by: com.digitalocean.csi.dobs
+    pv.kubernetes.io/provisioned-by: cloud.hetzner.csi.dobs
 spec:
-  storageClassName: do-block-storage
+  storageClassName: hc-block-storage
   # by default, the volume will be not deleted if you delete the PVC, change to
   # "Delete" if you wish the volume to be deleted automatically with the PVC
   persistentVolumeReclaimPolicy: Delete
@@ -38,18 +38,18 @@ spec:
   accessModes:
     - ReadWriteOnce
   csi:
-    driver: com.digitalocean.csi.dobs
+    driver: cloud.hetzner.csi.dobs
     fsType: ext4
     volumeHandle: 1952d58a-c714-11e8-bc0c-0a58ac14421e
     volumeAttributes:
-      com.digitalocean.csi/noformat: "true"
+      cloud.hetzner.csi/noformat: "true"
 ```
 
 Couple of things to note,
 
 * `volumeHandle` is the volume ID you want to reuse. Make sure it matches exactly the volume you're targeting. You can list the ID's of your volumes via doctl: `doctl compute volume list`
-* `volumeAttributes` has a special, csi-digitalocean specific annotation called `com.digitalocean.csi/noformat`. If you add this key, the CSI plugin makes sure to **not format** the volume. If you don't add this, it'll be formatted.
-* `storage` make sure it's set to the same storage size as your existing DigitalOcean Block Storage volume.
+* `volumeAttributes` has a special, csi-hetzner specific annotation called `cloud.hetzner.csi/noformat`. If you add this key, the CSI plugin makes sure to **not format** the volume. If you don't add this, it'll be formatted.
+* `storage` make sure it's set to the same storage size as your existing hetzner Block Storage volume.
 
 Create a file with this content, naming it `pv.yaml` and deploying it:
 
@@ -63,7 +63,7 @@ View information about the `PersistentVolume`:
 $ kubectl get pv volume-nyc1-01
 
 NAME             CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM     STORAGECLASS       REASON    AGE
-volume-nyc1-01   5Gi        RWO            Delete           Available             do-block-storage             15s
+volume-nyc1-01   5Gi        RWO            Delete           Available             hc-block-storage             15s
 ```
 
 The status is `Available`. This means it has not yet been bound to a
@@ -81,7 +81,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: do-block-storage
+  storageClassName: hc-block-storage
 ```
 
 This is the same (just like our other examples). When you create `PVC`,
@@ -101,7 +101,7 @@ Now look at the PersistentVolumeClaim (PVC):
 ```
 kubectl get pvc task-pv-claim
 NAME          STATUS    VOLUME           CAPACITY   ACCESS MODES   STORAGECLASS       AGE
-csi-pod-pvc   Bound     volume-nyc1-01   5Gi        RWO            do-block-storage   5s
+csi-pod-pvc   Bound     volume-nyc1-01   5Gi        RWO            hc-block-storage   5s
 ```
 
 As you see, the output shows that the PVC is bound to our PersistentVolume, `volume-nyc1-01`.
@@ -119,10 +119,10 @@ spec:
       image: busybox
       volumeMounts:
       - mountPath: "/data"
-        name: my-do-volume
+        name: my-hc-volume
       command: [ "sleep", "1000000" ]
   volumes:
-    - name: my-do-volume
+    - name: my-hc-volume
       persistentVolumeClaim:
         claimName: csi-pod-pvc 
 ```

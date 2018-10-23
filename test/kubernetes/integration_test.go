@@ -48,7 +48,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestPod_Single_Volume(t *testing.T) {
-	volumeName := "my-do-volume"
+	volumeName := "my-hc-volume"
 	claimName := "csi-pod-pvc"
 
 	pod := &v1.Pod{
@@ -104,7 +104,7 @@ func TestPod_Single_Volume(t *testing.T) {
 					v1.ResourceStorage: resource.MustParse("5Gi"),
 				},
 			},
-			StorageClassName: strPtr("do-block-storage"),
+			StorageClassName: strPtr("hc-block-storage"),
 		},
 	}
 
@@ -123,7 +123,7 @@ func TestPod_Single_Volume(t *testing.T) {
 }
 
 func TestDeployment_Single_Volume(t *testing.T) {
-	volumeName := "my-do-volume"
+	volumeName := "my-hc-volume"
 	claimName := "csi-deployment-pvc"
 	appName := "my-csi-app"
 
@@ -198,7 +198,7 @@ func TestDeployment_Single_Volume(t *testing.T) {
 					v1.ResourceStorage: resource.MustParse("5Gi"),
 				},
 			},
-			StorageClassName: strPtr("do-block-storage"),
+			StorageClassName: strPtr("hc-block-storage"),
 		},
 	}
 
@@ -235,8 +235,8 @@ func TestDeployment_Single_Volume(t *testing.T) {
 }
 
 func TestPod_Multi_Volume(t *testing.T) {
-	volumeName1 := "my-do-volume-1"
-	volumeName2 := "my-do-volume-2"
+	volumeName1 := "my-hc-volume-1"
+	volumeName2 := "my-hc-volume-2"
 	claimName1 := "csi-pod-pvc-1"
 	claimName2 := "csi-pod-pvc-2"
 	appName := "my-multi-csi-app"
@@ -307,7 +307,7 @@ func TestPod_Multi_Volume(t *testing.T) {
 					v1.ResourceStorage: resource.MustParse("5Gi"),
 				},
 			},
-			StorageClassName: strPtr("do-block-storage"),
+			StorageClassName: strPtr("hc-block-storage"),
 		},
 	}
 	_, err = client.CoreV1().PersistentVolumeClaims(namespace).Create(pvc1)
@@ -329,7 +329,7 @@ func TestPod_Multi_Volume(t *testing.T) {
 					v1.ResourceStorage: resource.MustParse("5Gi"),
 				},
 			},
-			StorageClassName: strPtr("do-block-storage"),
+			StorageClassName: strPtr("hc-block-storage"),
 		},
 	}
 	_, err = client.CoreV1().PersistentVolumeClaims(namespace).Create(pvc2)

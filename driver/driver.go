@@ -24,19 +24,19 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"sync"
+	"strconv"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
-	metadata "github.com/digitalocean/go-metadata"
-	"github.com/digitalocean/godo"
+	metadata "github.com/zenjoy/go-hc-metadata"
+
+	"github.com/hetznercloud/hcloud-go/hcloud"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/oauth2"
 	"google.golang.org/grpc"
 )
 
 const (
-	driverName = "com.digitalocean.csi.dobs"
+	driverName = "cloud.hetzner.csi.dobs"
 )
 
 var (
@@ -54,10 +54,12 @@ var (
 type Driver struct {
 	endpoint string
 	nodeId   string
+	node     *hcloud.Server
+	location *hcloud.Location
 	region   string
 
 	srv      *grpc.Server
-	doClient *godo.Client
+	hcClient *hcloud.Client
 	mounter  Mounter
 	log      *logrus.Entry
 
@@ -69,40 +71,40 @@ type Driver struct {
 
 // NewDriver returns a CSI plugin that contains the necessary gRPC
 // interfaces to interact with Kubernetes over unix domain sockets for
-// managaing DigitalOcean Block Storage
+// managaing hetzner Block Storage
 func NewDriver(ep, token, url string) (*Driver, error) {
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{
-		AccessToken: token,
-	})
-	oauthClient := oauth2.NewClient(context.Background(), tokenSource)
+	client := hcloud.NewClient(hcloud.WithToken(token))
 
 	all, err := metadata.NewClient().Metadata()
 	if err != nil {
 		return nil, fmt.Errorf("couldn't get metadata: %s", err)
 	}
 
-	region := all.Region
-	nodeId := strconv.Itoa(all.DropletID)
+	nodeId := all.InstanceId
 
-	opts := []godo.ClientOpt{}
-	opts = append(opts, godo.SetBaseURL(url))
+	node, _, err := client.Server.GetByID(context.Background(), nodeId)
+    if err != nil {
+		return nil, fmt.Errorf("error retrieving server: %s", err)
+    }
+	
+	location := node.Datacenter.Location
 
-	doClient, err := godo.New(oauthClient, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't initialize DigitalOcean client: %s", err)
-	}
+	// opts := []hcloud.ClientOpt{}
+	// opts = append(opts, hcloud.SetBaseURL(url))
 
 	log := logrus.New().WithFields(logrus.Fields{
-		"region":  region,
+		"region":  location.Name,
 		"node_id": nodeId,
 		"version": version,
 	})
 
 	return &Driver{
 		endpoint: ep,
-		nodeId:   nodeId,
-		region:   region,
-		doClient: doClient,
+		node:     node,
+		nodeId:   strconv.Itoa(nodeId),
+		location: location,
+		region:   location.Name,
+		hcClient: client,
 		mounter:  newMounter(log),
 		log:      log,
 	}, nil
@@ -175,7 +177,7 @@ func (d *Driver) Stop() {
 
 // When building any packages that import version, pass the build/install cmd
 // ldflags like so:
-//   go build -ldflags "-X github.com/digitalocean/csi-digitalocean/driver.version=0.0.1"
+//   go build -ldflags "-X github.com/zenjoy/csi-hetzner/driver.version=0.0.1"
 // GetVersion returns the current release version, as inserted at build time.
 func GetVersion() string {
 	return version

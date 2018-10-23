@@ -28,6 +28,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strconv"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
 	"github.com/sirupsen/logrus"
@@ -37,15 +38,15 @@ import (
 
 const (
 	diskIDPath   = "/dev/disk/by-id"
-	diskDOPrefix = "scsi-0DO_Volume_"
+	diskHCPrefix = "scsi-0HC_Volume_"
 
-	// See: https://www.digitalocean.com/docs/volumes/overview/#limits
-	maxVolumesPerNode = 7
+	// See: https://wiki.hetzner.de/index.php/CloudServer/en#Is_there_a_limit_on_the_number_of_attached_volumes.3F
+	maxVolumesPerNode = 5
 
 	// This annotation is added to a PV to indicate that the volume should be
 	// not formatted. Useful for cases if the user wants to reuse an existing
 	// volume.
-	annNoFormatVolume = "com.digitalocean.csi/noformat"
+	annNoFormatVolume = "cloud.hetzner.csi/noformat"
 )
 
 // NodeStageVolume mounts the volume to a staging path on the node. This is
@@ -66,7 +67,12 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 		return nil, status.Error(codes.InvalidArgument, "NodeStageVolume Volume Capability must be provided")
 	}
 
-	vol, resp, err := d.doClient.Storage.GetVolume(ctx, req.VolumeId)
+	volumeId, err := strconv.Atoi(req.VolumeId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Numeric Volume ID must be provided")
+	}
+
+	vol, resp, err := d.hcClient.Volume.GetByID(ctx, volumeId)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			return nil, status.Errorf(codes.NotFound, "volume %q not found", req.VolumeId)
@@ -74,7 +80,7 @@ func (d *Driver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRe
 		return nil, err
 	}
 
-	source := getDiskSource(vol.Name)
+	source := getDiskSource(req.VolumeId)
 	target := req.StagingTargetPath
 
 	mnt := req.VolumeCapability.GetMount()
@@ -323,5 +329,5 @@ func (d *Driver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (
 // getDiskSource returns the absolute path of the attached volume for the given
 // DO volume name
 func getDiskSource(volumeName string) string {
-	return filepath.Join(diskIDPath, diskDOPrefix+volumeName)
+	return filepath.Join(diskIDPath, diskHCPrefix+volumeName)
 }

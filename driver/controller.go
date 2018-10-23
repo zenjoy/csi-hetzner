@@ -26,7 +26,7 @@ import (
 	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi/v0"
-	"github.com/digitalocean/godo"
+	"github.com/hetznercloud/hcloud-go/hcloud"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,7 +43,7 @@ const (
 const (
 	defaultVolumeSizeInGB = 16 * GB
 
-	createdByDO = "Created by DigitalOcean CSI driver"
+	createdByHC = "HC CSI Volume"
 )
 
 var (
@@ -96,10 +96,7 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 	ll.Info("create volume called")
 
 	// get volume first, if it's created do no thing
-	volumes, _, err := d.doClient.Storage.ListVolumes(ctx, &godo.ListVolumeParams{
-		Region: d.region,
-		Name:   volumeName,
-	})
+	volumes, err := d.hcClient.Volume.All(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -111,24 +108,23 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 		}
 		vol := volumes[0]
 
-		if vol.SizeGigaBytes*GB != size {
+		if int64(vol.Size)*GB != size {
 			return nil, status.Error(codes.AlreadyExists, fmt.Sprintf("invalid option requested size: %d", size))
 		}
 
 		ll.Info("volume already created")
 		return &csi.CreateVolumeResponse{
 			Volume: &csi.Volume{
-				Id:            vol.ID,
-				CapacityBytes: vol.SizeGigaBytes * GB,
+				Id:            strconv.Itoa(vol.ID),
+				CapacityBytes: int64(vol.Size) * GB,
 			},
 		}, nil
 	}
 
-	volumeReq := &godo.VolumeCreateRequest{
-		Region:        d.region,
+	volumeReq := hcloud.VolumeCreateOpts{
+		Location:      d.location,
 		Name:          volumeName,
-		Description:   createdByDO,
-		SizeGigaBytes: size / GB,
+		Size:          int(size / GB),
 	}
 
 	if !validateCapabilities(req.VolumeCapabilities) {
@@ -141,14 +137,14 @@ func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest)
 	}
 
 	ll.WithField("volume_req", volumeReq).Info("creating volume")
-	vol, _, err := d.doClient.Storage.CreateVolume(ctx, volumeReq)
+	result, _, err := d.hcClient.Volume.Create(ctx, volumeReq)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	resp := &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			Id:            vol.ID,
+			Id:            strconv.Itoa(result.Volume.ID),
 			CapacityBytes: size,
 			AccessibleTopology: []*csi.Topology{
 				{
@@ -176,7 +172,15 @@ func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest)
 	})
 	ll.Info("delete volume called")
 
-	resp, err := d.doClient.Storage.DeleteVolume(ctx, req.VolumeId)
+	vol, _, err := d.hcClient.Volume.Get(ctx, req.VolumeId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if vol == nil {
+		return nil, status.Error(codes.NotFound, fmt.Sprintf("Volume with id %d was not found", req.VolumeId))
+	}
+
+	resp, err := d.hcClient.Volume.Delete(ctx, vol)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			// we assume it's deleted already for idempotency
@@ -207,10 +211,10 @@ func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 		return nil, status.Error(codes.InvalidArgument, "ControllerPublishVolume Volume capability must be provided")
 	}
 
-	dropletID, err := strconv.Atoi(req.NodeId)
+	instanceId, err := strconv.Atoi(req.NodeId)
 	if err != nil {
 		// don't return because the CSI tests passes ID's in non-integer format.
-		dropletID = 1 // for testing purposes only. Will fail in real world API
+		instanceId = 1 // for testing purposes only. Will fail in real world API
 		d.log.WithField("node_id", req.NodeId).Warn("node ID cannot be converted to an integer")
 	}
 
@@ -225,13 +229,18 @@ func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 	ll := d.log.WithFields(logrus.Fields{
 		"volume_id":  req.VolumeId,
 		"node_id":    req.NodeId,
-		"droplet_id": dropletID,
+		"instance_id": instanceId,
 		"method":     "controller_publish_volume",
 	})
 	ll.Info("controller publish volume called")
 
 	// check if volume exist before trying to attach it
-	vol, resp, err := d.doClient.Storage.GetVolume(ctx, req.VolumeId)
+	volumeId, err := strconv.Atoi(req.VolumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "invalid volume id (%q)", req.VolumeId)
+	}
+
+	vol, resp, err := d.hcClient.Volume.GetByID(ctx, volumeId)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			return nil, status.Errorf(codes.NotFound, "volume %q not found", req.VolumeId)
@@ -239,22 +248,24 @@ func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 		return nil, err
 	}
 
-	// check if droplet exist before trying to attach the volume to the droplet
-	_, resp, err = d.doClient.Droplets.Get(ctx, dropletID)
+	// check if server exist before trying to attach the volume to the droplet
+	server, resp, err := d.hcClient.Server.GetByID(ctx, instanceId)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, status.Errorf(codes.NotFound, "droplet %q not found", dropletID)
+			return nil, status.Errorf(codes.NotFound, "server %q not found", instanceId)
 		}
 		return nil, err
 	}
 
 	attachedID := 0
-	for _, id := range vol.DropletIDs {
-		attachedID = id
-		if id == dropletID {
-			ll.Info("volume is already attached")
-			return &csi.ControllerPublishVolumeResponse{}, nil
-		}
+
+	if vol.Server != nil {
+		attachedID = vol.Server.ID
+	}
+
+	if attachedID == instanceId {
+		ll.Info("volume is already attached")
+		return &csi.ControllerPublishVolumeResponse{}, nil
 	}
 
 	// droplet is attached to a different node, return an error
@@ -264,7 +275,7 @@ func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 	}
 
 	// attach the volume to the correct node
-	action, resp, err := d.doClient.StorageActions.Attach(ctx, req.VolumeId, dropletID)
+	action, resp, err := d.hcClient.Volume.Attach(ctx, vol, server)
 	if err != nil {
 		// don't do anything if attached
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
@@ -276,14 +287,14 @@ func (d *Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 				return &csi.ControllerPublishVolumeResponse{}, nil
 			}
 
-			if strings.Contains(err.Error(), "Droplet already has a pending event") {
+			if strings.Contains(err.Error(), "Instance already has a pending event") {
 				ll.WithFields(logrus.Fields{
 					"error": err,
 					"resp":  resp,
-				}).Warn("droplet is not able to detach the volume")
+				}).Warn("instance is not able to detach the volume")
 				// sending an abort makes sure the csi-attacher retries with the next backoff tick
-				return nil, status.Errorf(codes.Aborted, "volume %q couldn't be attached. droplet %d is in process of another action",
-					req.VolumeId, dropletID)
+				return nil, status.Errorf(codes.Aborted, "volume %q couldn't be attached. instance %d is in process of another action",
+					req.VolumeId, instanceId)
 			}
 		}
 		return nil, err
@@ -306,23 +317,23 @@ func (d *Driver) ControllerUnpublishVolume(ctx context.Context, req *csi.Control
 		return nil, status.Error(codes.InvalidArgument, "ControllerPublishVolume Volume ID must be provided")
 	}
 
-	dropletID, err := strconv.Atoi(req.NodeId)
+	instanceId, err := strconv.Atoi(req.NodeId)
 	if err != nil {
 		// don't return because the CSI tests passes ID's in non-integer format
-		dropletID = 1 // for testing purposes only. Will fail in real world API
+		instanceId = 1 // for testing purposes only. Will fail in real world API
 		d.log.WithField("node_id", req.NodeId).Warn("node ID cannot be converted to an integer")
 	}
 
 	ll := d.log.WithFields(logrus.Fields{
-		"volume_id":  req.VolumeId,
-		"node_id":    req.NodeId,
-		"droplet_id": dropletID,
-		"method":     "controller_unpublish_volume",
+		"volume_id":   req.VolumeId,
+		"node_id":     req.NodeId,
+		"instance_id": instanceId,
+		"method":      "controller_unpublish_volume",
 	})
 	ll.Info("controller unpublish volume called")
 
 	// check if volume exist before trying to detach it
-	_, resp, err := d.doClient.Storage.GetVolume(ctx, req.VolumeId)
+	volume, resp, err := d.hcClient.Volume.Get(ctx, req.VolumeId)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			// assume it's detached
@@ -331,16 +342,16 @@ func (d *Driver) ControllerUnpublishVolume(ctx context.Context, req *csi.Control
 		return nil, err
 	}
 
-	// check if droplet exist before trying to detach the volume from the droplet
-	_, resp, err = d.doClient.Droplets.Get(ctx, dropletID)
+	// check if instance exist before trying to detach the volume from the droplet
+	_, resp, err = d.hcClient.Server.GetByID(ctx, instanceId)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, status.Errorf(codes.NotFound, "droplet %q not found", dropletID)
+			return nil, status.Errorf(codes.NotFound, "instance %q not found", instanceId)
 		}
 		return nil, err
 	}
 
-	action, resp, err := d.doClient.StorageActions.DetachByDropletID(ctx, req.VolumeId, dropletID)
+	action, resp, err := d.hcClient.Volume.Detach(ctx, volume)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
 			if strings.Contains(err.Error(), "Attachment not found") {
@@ -351,14 +362,14 @@ func (d *Driver) ControllerUnpublishVolume(ctx context.Context, req *csi.Control
 				return &csi.ControllerUnpublishVolumeResponse{}, nil
 			}
 
-			if strings.Contains(err.Error(), "Droplet already has a pending event") {
+			if strings.Contains(err.Error(), "Server already has a pending event") {
 				ll.WithFields(logrus.Fields{
 					"error": err,
 					"resp":  resp,
-				}).Warn("droplet is not able to detach the volume")
+				}).Warn("server is not able to detach the volume")
 				// sending an abort makes sure the csi-attacher retries with the next backoff tick
-				return nil, status.Errorf(codes.Aborted, "volume %q couldn't be detached. droplet %d is in process of another action",
-					req.VolumeId, dropletID)
+				return nil, status.Errorf(codes.Aborted, "volume %q couldn't be detached. server %d is in process of another action",
+					req.VolumeId, instanceId)
 			}
 		}
 		return nil, err
@@ -396,7 +407,7 @@ func (d *Driver) ValidateVolumeCapabilities(ctx context.Context, req *csi.Valida
 	ll.Info("validate volume capabilities called")
 
 	// check if volume exist before trying to validate it it
-	_, volResp, err := d.doClient.Storage.GetVolume(ctx, req.VolumeId)
+	_, volResp, err := d.hcClient.Volume.Get(ctx, req.VolumeId)
 	if err != nil {
 		if volResp != nil && volResp.StatusCode == http.StatusNotFound {
 			return nil, status.Errorf(codes.NotFound, "volume %q not found", req.VolumeId)
@@ -441,12 +452,11 @@ func (d *Driver) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (
 		}
 	}
 
-	listOpts := &godo.ListVolumeParams{
-		ListOptions: &godo.ListOptions{
+	listOpts := hcloud.VolumeListOpts{
+		ListOpts: hcloud.ListOpts{
 			PerPage: int(req.MaxEntries),
 			Page:    page,
 		},
-		Region: d.region,
 	}
 
 	ll := d.log.WithFields(logrus.Fields{
@@ -456,42 +466,35 @@ func (d *Driver) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (
 	})
 	ll.Info("list volumes called")
 
-	var volumes []godo.Volume
+	var volumes []*hcloud.Volume
 	lastPage := 0
 	for {
-		vols, resp, err := d.doClient.Storage.ListVolumes(ctx, listOpts)
+		vols, resp, err := d.hcClient.Volume.List(ctx, listOpts)
 		if err != nil {
 			return nil, err
 		}
 
 		volumes = append(volumes, vols...)
 
-		if resp.Links == nil || resp.Links.IsLastPage() {
-			if resp.Links != nil {
-				page, err := resp.Links.CurrentPage()
-				if err != nil {
-					return nil, err
-				}
+		if resp.Meta.Pagination == nil || resp.Meta.Pagination != nil {
+			if resp.Meta.Pagination != nil {
+				page := resp.Meta.Pagination.Page
+
 				// save this for the response
 				lastPage = page
 			}
 			break
 		}
 
-		page, err := resp.Links.CurrentPage()
-		if err != nil {
-			return nil, err
-		}
-
-		listOpts.ListOptions.Page = page + 1
+		listOpts.ListOpts.Page = resp.Meta.Pagination.Page + 1
 	}
 
 	var entries []*csi.ListVolumesResponse_Entry
 	for _, vol := range volumes {
 		entries = append(entries, &csi.ListVolumesResponse_Entry{
 			Volume: &csi.Volume{
-				Id:            vol.ID,
-				CapacityBytes: vol.SizeGigaBytes * GB,
+				Id:            strconv.Itoa(vol.ID),
+				CapacityBytes: int64(vol.Size) * GB,
 			},
 		})
 	}
@@ -627,19 +630,19 @@ func (d *Driver) waitAction(ctx context.Context, volumeId string, actionId int) 
 	for {
 		select {
 		case <-ticker.C:
-			action, _, err := d.doClient.StorageActions.Get(ctx, volumeId, actionId)
+			action, _, err := d.hcClient.Action.GetByID(ctx, actionId)
 			if err != nil {
 				ll.WithError(err).Info("waiting for volume errored")
 				continue
 			}
 			ll.WithField("action_status", action.Status).Info("action received")
 
-			if action.Status == godo.ActionCompleted {
+			if action.Status == hcloud.ActionStatusSuccess {
 				ll.Info("action completed")
 				return nil
 			}
 
-			if action.Status == godo.ActionInProgress {
+			if action.Status == hcloud.ActionStatusRunning {
 				continue
 			}
 		case <-ctx.Done():
@@ -651,42 +654,45 @@ func (d *Driver) waitAction(ctx context.Context, volumeId string, actionId int) 
 // checkLimit checks whether the user hit their volume limit to ensure.
 func (d *Driver) checkLimit(ctx context.Context) error {
 	// only one provisioner runs, we can make sure to prevent burst creation
-	d.readyMu.Lock()
-	defer d.readyMu.Unlock()
+	
+	// Seems not implemented in Hetzner Cloud API (https://docs.hetzner.cloud/)
 
-	account, _, err := d.doClient.Account.Get(ctx)
-	if err != nil {
-		return status.Errorf(codes.Internal,
-			"couldn't get account information to check volume limit: %s", err.Error())
-	}
+	// d.readyMu.Lock()
+	// defer d.readyMu.Unlock()
 
-	// administrative accounts might have zero length limits, make sure to not check them
-	if account.VolumeLimit == 0 {
-		return nil //  hail to the king!
-	}
+	// account, _, err := d.hcClient.Account.Get(ctx)
+	// if err != nil {
+	// 	return status.Errorf(codes.Internal,
+	// 		"couldn't get account information to check volume limit: %s", err.Error())
+	// }
 
-	// NOTE(arslan): the API returns the limit for *all* regions, so passing
-	// the region down as a parameter doesn't change the response.
-	// Nevertheless, this is something we should be aware of.
-	volumes, _, err := d.doClient.Storage.ListVolumes(ctx, &godo.ListVolumeParams{
-		Region: d.region,
-	})
-	if err != nil {
-		return status.Errorf(codes.Internal,
-			"couldn't get fetch volume list to check volume limit: %s", err.Error())
-	}
+	// // administrative accounts might have zero length limits, make sure to not check them
+	// if account.VolumeLimit == 0 {
+	// 	return nil //  hail to the king!
+	// }
 
-	if account.VolumeLimit <= len(volumes) {
-		return status.Errorf(codes.ResourceExhausted,
-			"volume limit (%d) has been reached. Current number of volumes: %d. Please contact support.",
-			account.VolumeLimit, len(volumes))
-	}
+	// // NOTE(arslan): the API returns the limit for *all* regions, so passing
+	// // the region down as a parameter doesn't change the response.
+	// // Nevertheless, this is something we should be aware of.
+	// volumes, _, err := d.hcClient.Storage.ListVolumes(ctx, &godo.ListVolumeParams{
+	// 	Region: d.region,
+	// })
+	// if err != nil {
+	// 	return status.Errorf(codes.Internal,
+	// 		"couldn't get fetch volume list to check volume limit: %s", err.Error())
+	// }
+
+	// if account.VolumeLimit <= len(volumes) {
+	// 	return status.Errorf(codes.ResourceExhausted,
+	// 		"volume limit (%d) has been reached. Current number of volumes: %d. Please contact support.",
+	// 		account.VolumeLimit, len(volumes))
+	// }
 
 	return nil
 }
 
 // validateCapabilities validates the requested capabilities. It returns false
-// if it doesn't satisfy the currently supported modes of DigitalOcean Block
+// if it doesn't satisfy the currently supported modes of hetzner Block
 // Storage
 func validateCapabilities(caps []*csi.VolumeCapability) bool {
 	vcaps := []*csi.VolumeCapability_AccessMode{supportedAccessMode}

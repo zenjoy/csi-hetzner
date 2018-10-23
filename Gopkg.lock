@@ -20,14 +20,14 @@
 [[projects]]
   branch = "master"
   digest = "1:61de135f4b8df007636577b431ab965672680ebf15ac6c3978f28a3f509a086e"
-  name = "github.com/digitalocean/go-metadata"
+  name = "github.com/hetzner/go-metadata"
   packages = ["."]
   pruneopts = "UT"
   revision = "15bd36e5f6f745f32074d0705a27aee05ae0a216"
 
 [[projects]]
   digest = "1:986666250a191ffe32e1445e31fadc1517adbad218b7aa71a078ab81a3933def"
-  name = "github.com/digitalocean/godo"
+  name = "github.com/hetzner/godo"
   packages = ["."]
   pruneopts = "UT"
   revision = "6a6ce62154ba780ecbb97bbbb13a4e9e0b157070"
@@ -584,8 +584,8 @@
   analyzer-version = 1
   input-imports = [
     "github.com/container-storage-interface/spec/lib/go/csi/v0",
-    "github.com/digitalocean/go-metadata",
-    "github.com/digitalocean/godo",
+    "github.com/hetzner/go-metadata",
+    "github.com/hetzner/godo",
     "github.com/golang/protobuf/ptypes/wrappers",
     "github.com/kubernetes-csi/csi-test/pkg/sanity",
     "github.com/sirupsen/logrus",
