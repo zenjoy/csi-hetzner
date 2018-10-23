@@ -1,35 +1,26 @@
-# csi-hetzner [![Build Status](https://travis-ci.org/hetzner/csi-hetzner.svg?branch=master)](https://travis-ci.org/hetzner/csi-hetzner)
-A Container Storage Interface ([CSI](https://github.com/container-storage-interface/spec)) Driver for hetzner Block Storage. The CSI plugin allows you to use hetzner Block Storage with your preferred Container Orchestrator.
+A Container Storage Interface ([CSI](https://github.com/container-storage-interface/spec)) Driver for Hetzner Cloud Volumes. The CSI plugin allows you to use Hetzner Cloud Volumes with your preferred Container Orchestrator.
 
-The hetzner CSI plugin is mostly tested on Kubernetes. Theoretically it
+The Hetzner CSI plugin is mostly tested on Kubernetes. Theoretically it
 should also work on other Container Orchestrator's, such as Mesos or
 Cloud Foundry. Feel free to test it on other CO's and give us a feedback.
 
-## Releases
+## Acknowledgement
 
-The hetzner CSI plugin follows [semantic versioning](https://semver.org/).
-The current version is: **`v0.2.0`**. This means that the project is still
-under active development and may not be production ready. The plugin will be
-bumped to **`v1.0.0`** once the [hetzner Kubernetes
-product](https://www.hetzner.com/products/kubernetes/) is released and
-will continue following the rules below:
-
-* Bug fixes will be released as a `PATCH` update.
-* New features (such as CSI spec bumps) will be released as a `MINOR` update.
-* Significant breaking changes makes a `MAJOR` update.
-
+The code for this driver was adapted from the [Container Storage Interface (CSI) Driver for DigitalOcean Block Storage](https://github.com/digitalocean/csi-digitalocean) and modified to work with the Hetzner Cloud API. Many thanks for their work on the CSI Driver!
 
 ## Installing to Kubernetes
 
 **Requirements:**
 
-* Kubernetes v1.12 minimum 
+* Kubernetes v1.12+
+* enabling feature gates `--feature-gates=VolumeSnapshotDataSource=true,KubeletPluginsWatcher=true,CSINodeInfo=true,CSIDriverRegistry=true
+`
 * `--allow-privileged` flag must be set to true for both the API server and the kubelet
 * (if you use Docker) the Docker daemon of the cluster nodes must allow shared mounts
 
 #### 1. Create a secret with your Hetzner Cloud API Token:
 
-Replace the placeholder string starting with `a05...` with your own secret and
+Replace the placeholder string starting with `__REPLACE_ME__` with your own secret and
 save it as `secret.yml`: 
 
 ```
@@ -39,7 +30,7 @@ metadata:
   name: hetzner
   namespace: kube-system
 stringData:
-  access-token: "a05dd2f26b9b9ac2asdas__REPLACE_ME____123cb5d1ec17513e06da"
+  access-token: "__REPLACE_ME__"
 ```
 
 and create the secret using kubectl:
@@ -58,17 +49,29 @@ default-token-jskxx   kubernetes.io/service-account-token   3         18h
 hetzner          Opaque                                1         18h
 ```
 
-#### 2. Deploy the CSI plugin and sidecars:
+#### 2. Deploy the CSI plugin:
 
-Before you continue, be sure to checkout to a [tagged
-release](https://github.com/hetzner/csi-hetzner/releases). Always use the [latest stable version](https://github.com/hetzner/csi-hetzner/releases/latest) 
-For example, to use the latest stable version (`v0.2.0`) you can execute the following command:
+(instructions are from the [Kubernetes v1.12 CSI Driver guides](https://kubernetes-csi.github.io/docs/Setup.html))
+
+Enable the CSIDriver:
 
 ```
-$ kubectl apply -f https://raw.githubusercontent.com/hetzner/csi-hetzner/master/deploy/kubernetes/releases/csi-hetzner-v0.2.0.yaml
+$ kubectl apply -f https://raw.githubusercontent.com/kubernetes/csi-api/master/pkg/crd/testdata/csidriver.yaml --validate=false
 ```
 
-This file will be always updated to point to the latest stable release.
+If your cluster uses RBAC, create the applicable cluster roles:
+
+```
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-provisioner-rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-attacher-rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-nodeplugin-rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/snapshot/csi-snapshotter-rbac.yaml
+```
+
+Last, deploy the Hetzner Cloud Volume CSI Driver:
+```
+$ kubectl apply -f https://raw.githubusercontent.com/zenjoy/csi-hetzner/master/deploy/kubernetes/releases/csi-hetzner-dev.yaml
+```
 
 A new storage class will be created with the name `hc-block-storage` which is
 responsible for dynamic provisioning. This is set to **"default"** for dynamic
@@ -93,7 +96,7 @@ spec:
   - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 10Gi
   storageClassName: hc-block-storage
 ```
 
@@ -102,12 +105,8 @@ Check that a new `PersistentVolume` is created based on your claim:
 ```
 $ kubectl get pv
 NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS    CLAIM             STORAGECLASS       REASON    AGE
-pvc-0879b207-9558-11e8-b6b4-5218f75c62b9   5Gi        RWO            Delete           Bound     default/csi-pvc   hc-block-storage             3m
+pvc-0879b207-9558-11e8-b6b4-5218f75c62b9   10Gi        RWO            Delete           Bound     default/csi-pvc   hc-block-storage             3m
 ```
-
-The above output means that the CSI plugin successfully created (provisioned) a
-new Volume on behalf of you. You should be able to see this newly created
-volume under the [Volumes tab in the hetzner UI](https://cloud.hetzner.com/droplets/volumes)
 
 The volume is not attached to any node yet. It'll only attached to a node if a
 workload (i.e: pod) is scheduled to a specific node. Now let us create a Pod
@@ -150,65 +149,3 @@ $ kubectl exec -ti my-csi-app /bin/sh
 / # ls /data
 hello-world
 ```
-
-## Development
-
-Requirements:
-
-* Go: min `v1.10.x`
-
-After making your changes, run the unit tests: 
-
-```
-$ make test
-```
-
-If you want to test your changes, create a new image with the version set to `dev`:
-
-```
-$ VERSION=dev make publish
-```
-
-This will create a binary with version `dev` and docker image pushed to
-`hetzner/hc-csi-plugin:dev`
-
-
-To run the integration tests run the following:
-
-```
-$ KUBECONFIG=$(pwd)/kubeconfig make test-integration
-```
-
-
-### Release a new version
-
-To release a new version bump first the version:
-
-```
-$ make bump-version
-```
-
-Make sure everything looks good. Create a new branch with all changes:
-
-```
-$ git checkout -b new-release
-$ git add .
-$ git push origin
-```
-
-After it's merged to master, [create a new Github
-release](https://github.com/hetzner/csi-hetzner/releases/new) from
-master with the version `v0.2.0` and then publish a new docker build:
-
-```
-$ git checkout master
-$ make publish
-```
-
-This will create a binary with version `v0.2.0` and docker image pushed to
-`hetzner/hc-csi-plugin:v0.2.0`
-
-## Contributing
-
-At hetzner we value and love our community! If you have any issues or
-would like to contribute, feel free to open an issue/PR
