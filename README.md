@@ -1,8 +1,13 @@
 A Container Storage Interface ([CSI](https://github.com/container-storage-interface/spec)) Driver for Hetzner Cloud Volumes. The CSI plugin allows you to use Hetzner Cloud Volumes with your preferred Container Orchestrator.
 
-The Hetzner CSI plugin is mostly tested on Kubernetes. Theoretically it
+The Hetzner CSI plugin is only tested on Kubernetes and is highly experimental. Theoretically it
 should also work on other Container Orchestrator's, such as Mesos or
-Cloud Foundry. Feel free to test it on other CO's and give us a feedback.
+Cloud Foundry.
+
+Current limitations are:
+
+* Volumes need to be minimum 10Gi
+* Maximum 5 volumes can be attached to a single server
 
 ## Acknowledgement
 
