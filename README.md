@@ -61,16 +61,20 @@ hetzner          Opaque                                1         18h
 Enable the CSIDriver:
 
 ```
-$ kubectl apply -f https://raw.githubusercontent.com/kubernetes/csi-api/master/pkg/crd/testdata/csidriver.yaml --validate=false
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes/csi-api/ab0df28581235f5350f27ce9c27485850a3b2802/pkg/crd/testdata/csidriver.yaml --validate=false
+```
+
+```
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes/csi-api/ab0df28581235f5350f27ce9c27485850a3b2802/pkg/crd/testdata/csinodeinfo.yaml --validate=false
 ```
 
 If your cluster uses RBAC, create the applicable cluster roles:
 
 ```
-$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-provisioner-rbac.yaml
-$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-attacher-rbac.yaml
-$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/rbac/csi-nodeplugin-rbac.yaml
-$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/docs/master/book/src/example/snapshot/csi-snapshotter-rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/external-provisioner/1cd1c20a6d4b2fcd25c98a008385b436d61d46a4/deploy/kubernetes/rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/external-attacher/9da8c6d20d58750ee33d61d0faf0946641f50770/deploy/kubernetes/rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/driver-registrar/87d0059110a8b4a90a6d2b5a8702dd7f3f270b80/deploy/kubernetes/rbac.yaml
+$ kubectl create -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/51482343dc7f81fef64e3ec32ea3f48fec17b9cf/deploy/kubernetes/rbac.yaml
 ```
 
 Last, deploy the Hetzner Cloud Volume CSI Driver:
